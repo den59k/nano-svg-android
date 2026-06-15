@@ -1,0 +1,2 @@
+-keep class com.ingenuity.svg.SVGRawData { *; }
+-keep class com.ingenuity.svg.SVGParser { *; }
