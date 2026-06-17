@@ -37,9 +37,29 @@ SVG string ──JNI──▶ nanosvg (C) ──▶ SVGRawData (primitive arrays
 
 `SVGRenderer` is a stateless object that reuses one `Paint` across draws (no allocation in the hot path); do not call `drawSvg` from multiple threads concurrently.
 
+## Gradients
+
+Linear and radial gradients are parsed and rendered for both fills and strokes. The
+native layer flattens each gradient (transform, spread mode, and color stops) into
+`SVGRawData`, `SVGParser` exposes them as `SVGShape.fillPaint` / `strokePaint`
+([`SVGPaint`](svg-android/src/main/kotlin/com/ingenuity/svg/ParsedSVG.kt): `Color`,
+`Linear`, `Radial`, or `None`), and `SVGRenderer` installs an
+`android.graphics.Shader` (built once per gradient and cached). Spread maps to the
+matching `Shader.TileMode` (`pad`→`CLAMP`, `reflect`→`MIRROR`, `repeat`→`REPEAT`).
+
+The scalar `SVGShape.fillColor` / `strokeColor` remain `0` for gradient paints — read
+`fillPaint` / `strokePaint` to inspect them. A `tint` still overrides everything with a
+flat color, gradients included.
+
+This mirrors the [iOS counterpart](https://github.com/den59k/NanoSVG-IOS); two minor
+differences come from `android.graphics.RadialGradient` being concentric-only: the
+radial **focal point** (`fx`/`fy`) is parsed but not applied, and shape opacity is not
+folded into gradient stop alpha.
+
 ## Limitations
 
-Inherited from nanosvg: cubic-Bézier path geometry, solid fills/strokes, fill rules, caps/joins/miter. **Gradients, patterns, and text are not rendered** — a gradient fill/stroke surfaces as "absent" (color `0`).
+Inherited from nanosvg: cubic-Bézier path geometry, fill rules, caps/joins/miter.
+**Patterns and text are not rendered.**
 
 ## Build
 

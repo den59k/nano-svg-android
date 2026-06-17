@@ -30,6 +30,18 @@ static jfieldID  g_fShapeStrokeJoin   = nullptr;
 static jfieldID  g_fShapeMiterLimit   = nullptr;
 static jfieldID  g_fShapeSubpathStart = nullptr;
 static jfieldID  g_fShapeSubpathCount = nullptr;
+static jfieldID  g_fShapeFillType     = nullptr;
+static jfieldID  g_fShapeStrokeType   = nullptr;
+static jfieldID  g_fShapeFillGradient   = nullptr;
+static jfieldID  g_fShapeStrokeGradient = nullptr;
+static jfieldID  g_fGradXform         = nullptr;
+static jfieldID  g_fGradSpread        = nullptr;
+static jfieldID  g_fGradFx            = nullptr;
+static jfieldID  g_fGradFy            = nullptr;
+static jfieldID  g_fGradStopStart     = nullptr;
+static jfieldID  g_fGradStopCount     = nullptr;
+static jfieldID  g_fGradStopColors    = nullptr;
+static jfieldID  g_fGradStopOffsets   = nullptr;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     JNIEnv* env = nullptr;
@@ -58,6 +70,18 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     g_fShapeMiterLimit   = env->GetFieldID(cls, "shapeMiterLimit",   "[F");
     g_fShapeSubpathStart = env->GetFieldID(cls, "shapeSubpathStart", "[I");
     g_fShapeSubpathCount = env->GetFieldID(cls, "shapeSubpathCount", "[I");
+    g_fShapeFillType       = env->GetFieldID(cls, "shapeFillType",       "[I");
+    g_fShapeStrokeType     = env->GetFieldID(cls, "shapeStrokeType",     "[I");
+    g_fShapeFillGradient   = env->GetFieldID(cls, "shapeFillGradient",   "[I");
+    g_fShapeStrokeGradient = env->GetFieldID(cls, "shapeStrokeGradient", "[I");
+    g_fGradXform         = env->GetFieldID(cls, "gradXform",         "[F");
+    g_fGradSpread        = env->GetFieldID(cls, "gradSpread",        "[I");
+    g_fGradFx            = env->GetFieldID(cls, "gradFx",            "[F");
+    g_fGradFy            = env->GetFieldID(cls, "gradFy",            "[F");
+    g_fGradStopStart     = env->GetFieldID(cls, "gradStopStart",     "[I");
+    g_fGradStopCount     = env->GetFieldID(cls, "gradStopCount",     "[I");
+    g_fGradStopColors    = env->GetFieldID(cls, "gradStopColors",    "[I");
+    g_fGradStopOffsets   = env->GetFieldID(cls, "gradStopOffsets",   "[F");
 
     return JNI_VERSION_1_6;
 }
@@ -133,6 +157,60 @@ Java_com_ingenuity_svg_SVGParser_nativeParse(JNIEnv* env, jobject /*thiz*/, jstr
     std::vector<float>  shapeStrokeWidth, shapeMiterLimit;
     std::vector<int>    shapeStrokeCap, shapeStrokeJoin;
     std::vector<int>    shapeSubpathStart, shapeSubpathCount;
+    std::vector<int>    shapeFillType, shapeStrokeType;
+    std::vector<int>    shapeFillGradient, shapeStrokeGradient;
+
+    // Gradient table — appended to as gradient paints are encountered.
+    std::vector<float>  gradXform;        // 6 floats per gradient
+    std::vector<int>    gradSpread;
+    std::vector<float>  gradFx, gradFy;
+    std::vector<int>    gradStopStart, gradStopCount;
+    std::vector<int>    gradStopColors;   // flattened stops
+    std::vector<float>  gradStopOffsets;
+
+    // Flattens one nanosvg gradient into the table and returns its index.
+    auto appendGradient = [&](const NSVGgradient* g) -> int {
+        const int gi = static_cast<int>(gradSpread.size());
+        for (int i = 0; i < 6; i++) gradXform.push_back(g->xform[i]);
+        gradSpread.push_back(static_cast<int>(g->spread));
+        gradFx.push_back(g->fx);
+        gradFy.push_back(g->fy);
+        gradStopStart.push_back(static_cast<int>(gradStopColors.size()));
+        gradStopCount.push_back(g->nstops);
+        for (int i = 0; i < g->nstops; i++) {
+            // Gradient stops carry their own alpha; shape opacity is not folded in
+            // (matching the iOS implementation).
+            gradStopColors.push_back(convertColor(g->stops[i].color, 1.0f));
+            gradStopOffsets.push_back(g->stops[i].offset);
+        }
+        return gi;
+    };
+
+    // Resolves a paint into a type code (0=none,1=color,2=linear,3=radial),
+    // its solid color (0 unless type==color), and a gradient-table index (-1
+    // unless the paint is a gradient).
+    auto resolvePaint = [&](const NSVGpaint& paint, float opacity,
+                            int& outType, jint& outColor, int& outGradIdx) {
+        outColor   = 0;
+        outGradIdx = -1;
+        switch (paint.type) {
+            case NSVG_PAINT_COLOR:
+                outType  = 1;
+                outColor = convertColor(paint.color, opacity);
+                break;
+            case NSVG_PAINT_LINEAR_GRADIENT:
+                outType    = paint.gradient ? 2 : 0;
+                if (paint.gradient) outGradIdx = appendGradient(paint.gradient);
+                break;
+            case NSVG_PAINT_RADIAL_GRADIENT:
+                outType    = paint.gradient ? 3 : 0;
+                if (paint.gradient) outGradIdx = appendGradient(paint.gradient);
+                break;
+            default: // NSVG_PAINT_NONE / NSVG_PAINT_UNDEF
+                outType = 0;
+                break;
+        }
+    };
 
     int shapeIdx = 0;
     for (NSVGshape* shape = image->shapes; shape != nullptr; shape = shape->next) {
@@ -154,19 +232,15 @@ Java_com_ingenuity_svg_SVGParser_nativeParse(JNIEnv* env, jobject /*thiz*/, jstr
             subpathsInShape++;
         }
 
-        // hasFill / hasStroke: NONE and UNDEF both mean "absent".
-        // Gradient fills are marked present but fillColor stays 0 until phase 2.
-        const bool hasFill   = (shape->fill.type   != NSVG_PAINT_NONE &&
-                                 shape->fill.type   != NSVG_PAINT_UNDEF);
-        const bool hasStroke = (shape->stroke.type != NSVG_PAINT_NONE &&
-                                 shape->stroke.type != NSVG_PAINT_UNDEF);
+        // Resolve fill and stroke paints (solid color or gradient). NONE and
+        // UNDEF both yield type 0; any other type marks the paint as present.
+        int  fillType, strokeType, fillGradIdx, strokeGradIdx;
+        jint fillColor, strokeColor;
+        resolvePaint(shape->fill,   shape->opacity, fillType,   fillColor,   fillGradIdx);
+        resolvePaint(shape->stroke, shape->opacity, strokeType, strokeColor, strokeGradIdx);
 
-        jint fillColor   = 0;
-        jint strokeColor = 0;
-        if (hasFill   && shape->fill.type   == NSVG_PAINT_COLOR)
-            fillColor   = convertColor(shape->fill.color,   shape->opacity);
-        if (hasStroke && shape->stroke.type == NSVG_PAINT_COLOR)
-            strokeColor = convertColor(shape->stroke.color, shape->opacity);
+        const bool hasFill   = (fillType   != 0);
+        const bool hasStroke = (strokeType != 0);
 
         const int flags =
             (hasFill   ? 1 : 0) |
@@ -176,6 +250,10 @@ Java_com_ingenuity_svg_SVGParser_nativeParse(JNIEnv* env, jobject /*thiz*/, jstr
         shapeFillColor.push_back(static_cast<int>(fillColor));
         shapeStrokeColor.push_back(static_cast<int>(strokeColor));
         shapeFlags.push_back(flags);
+        shapeFillType.push_back(fillType);
+        shapeStrokeType.push_back(strokeType);
+        shapeFillGradient.push_back(fillGradIdx);
+        shapeStrokeGradient.push_back(strokeGradIdx);
         shapeStrokeWidth.push_back(shape->strokeWidth);
         shapeStrokeCap.push_back(static_cast<int>(shape->strokeLineCap));
         shapeStrokeJoin.push_back(static_cast<int>(shape->strokeLineJoin));
@@ -213,6 +291,18 @@ Java_com_ingenuity_svg_SVGParser_nativeParse(JNIEnv* env, jobject /*thiz*/, jstr
     env->SetObjectField(result, g_fShapeMiterLimit,   makeFloatArray(env, shapeMiterLimit));
     env->SetObjectField(result, g_fShapeSubpathStart, makeIntArray(env, shapeSubpathStart));
     env->SetObjectField(result, g_fShapeSubpathCount, makeIntArray(env, shapeSubpathCount));
+    env->SetObjectField(result, g_fShapeFillType,       makeIntArray(env, shapeFillType));
+    env->SetObjectField(result, g_fShapeStrokeType,     makeIntArray(env, shapeStrokeType));
+    env->SetObjectField(result, g_fShapeFillGradient,   makeIntArray(env, shapeFillGradient));
+    env->SetObjectField(result, g_fShapeStrokeGradient, makeIntArray(env, shapeStrokeGradient));
+    env->SetObjectField(result, g_fGradXform,         makeFloatArray(env, gradXform));
+    env->SetObjectField(result, g_fGradSpread,        makeIntArray(env, gradSpread));
+    env->SetObjectField(result, g_fGradFx,            makeFloatArray(env, gradFx));
+    env->SetObjectField(result, g_fGradFy,            makeFloatArray(env, gradFy));
+    env->SetObjectField(result, g_fGradStopStart,     makeIntArray(env, gradStopStart));
+    env->SetObjectField(result, g_fGradStopCount,     makeIntArray(env, gradStopCount));
+    env->SetObjectField(result, g_fGradStopColors,    makeIntArray(env, gradStopColors));
+    env->SetObjectField(result, g_fGradStopOffsets,   makeFloatArray(env, gradStopOffsets));
 
     return result;
 }

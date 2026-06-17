@@ -16,6 +16,15 @@ package com.ingenuity.svg
  *   bit 0 (1) = hasFill
  *   bit 1 (2) = hasStroke
  *   bit 2 (4) = evenOdd fill rule
+ *
+ * Paint type codes (shapeFillType / shapeStrokeType):
+ *   0 = none, 1 = solid color, 2 = linear gradient, 3 = radial gradient
+ *
+ * Gradients are flattened into a side table: each fill/stroke that is a gradient
+ * stores an index into the per-gradient parallel arrays via shapeFillGradient /
+ * shapeStrokeGradient (-1 when the paint is not a gradient).  Variable-length stop
+ * lists are concatenated into gradStopColors / gradStopOffsets and sliced per
+ * gradient with gradStopStart / gradStopCount.
  */
 class SVGRawData {
     @JvmField var width: Float = 0f
@@ -40,4 +49,23 @@ class SVGRawData {
     @JvmField var shapeMiterLimit: FloatArray = FloatArray(0)
     @JvmField var shapeSubpathStart: IntArray = IntArray(0) // first subpath index for this shape
     @JvmField var shapeSubpathCount: IntArray = IntArray(0) // number of subpaths for this shape
+
+    // Per-shape paint kind: 0=none, 1=color, 2=linear gradient, 3=radial gradient.
+    @JvmField var shapeFillType: IntArray = IntArray(0)
+    @JvmField var shapeStrokeType: IntArray = IntArray(0)
+    // Index into the gradient table below, or -1 when the paint is not a gradient.
+    @JvmField var shapeFillGradient: IntArray = IntArray(0)
+    @JvmField var shapeStrokeGradient: IntArray = IntArray(0)
+
+    // Gradient table (parallel arrays, one entry per gradient referenced by a paint).
+    @JvmField var gradXform: FloatArray = FloatArray(0)     // 6 floats per gradient [a,b,c,d,tx,ty]
+    @JvmField var gradSpread: IntArray = IntArray(0)        // 0=pad, 1=reflect, 2=repeat
+    @JvmField var gradFx: FloatArray = FloatArray(0)        // radial focal x (gradient space, 0..1)
+    @JvmField var gradFy: FloatArray = FloatArray(0)        // radial focal y (gradient space, 0..1)
+    @JvmField var gradStopStart: IntArray = IntArray(0)     // first stop index in gradStop* arrays
+    @JvmField var gradStopCount: IntArray = IntArray(0)     // number of stops for this gradient
+
+    // Concatenated gradient stops across all gradients.
+    @JvmField var gradStopColors: IntArray = IntArray(0)    // 0xAARRGGBB per stop
+    @JvmField var gradStopOffsets: FloatArray = FloatArray(0) // 0..1 position per stop
 }

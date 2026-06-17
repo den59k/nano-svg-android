@@ -223,6 +223,93 @@ class SVGParserTest {
     }
 
     // ------------------------------------------------------------------
+    // Gradients
+    // ------------------------------------------------------------------
+
+    private val linearGradientSvg = """
+        <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="100" y2="0">
+              <stop offset="0" stop-color="#FF0000"/>
+              <stop offset="1" stop-color="#0000FF"/>
+            </linearGradient>
+          </defs>
+          <rect x="0" y="0" width="100" height="100" fill="url(#g)"/>
+        </svg>
+    """.trimIndent()
+
+    private val radialGradientSvg = """
+        <svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="g" cx="50" cy="50" r="50" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFFFFF"/>
+              <stop offset="1" stop-color="#000000"/>
+            </radialGradient>
+          </defs>
+          <rect x="0" y="0" width="100" height="100" fill="url(#g)"/>
+        </svg>
+    """.trimIndent()
+
+    @Test
+    fun linearGradient_parsedAsPaint() {
+        val shape = SVGParser.parse(linearGradientSvg)!!.shapes[0]
+        assertTrue(shape.hasFill)
+        // Scalar color stays 0 for gradient paints; the paint carries the gradient.
+        assertEquals(0, shape.fillColor)
+        val fill = shape.fillPaint
+        assertTrue("Expected linear gradient, got $fill", fill is SVGPaint.Linear)
+        val g = (fill as SVGPaint.Linear).gradient
+        assertEquals(2, g.stops.size)
+        assertEquals(6, g.xform.size)
+        assertEquals(0xFFFF0000.toInt(), g.stops.first().color)
+        assertEquals(0xFF0000FF.toInt(), g.stops.last().color)
+    }
+
+    @Test
+    fun radialGradient_parsedAsPaint() {
+        val shape = SVGParser.parse(radialGradientSvg)!!.shapes[0]
+        val fill = shape.fillPaint
+        assertTrue("Expected radial gradient, got $fill", fill is SVGPaint.Radial)
+        assertEquals(2, (fill as SVGPaint.Radial).gradient.stops.size)
+    }
+
+    @Test
+    fun linearGradient_drawsVaryingColors() {
+        val parsed = SVGParser.parse(linearGradientSvg)!!
+        val bmp = bitmap()
+        SVGRenderer.drawSvg(Canvas(bmp), 0, 0, 100, 100, parsed)
+        // Left edge skews red, right edge skews blue — they must differ.
+        val left  = pixelAt(bmp, 2, 50)
+        val right = pixelAt(bmp, 97, 50)
+        assertTrue("Left pixel should have alpha", left ushr 24 != 0)
+        assertTrue("Right pixel should have alpha", right ushr 24 != 0)
+        assertNotEquals("Gradient endpoints should differ in color", left, right)
+        val leftRed  = (left  shr 16) and 0xFF
+        val rightRed = (right shr 16) and 0xFF
+        assertTrue("Left should be redder than right", leftRed > rightRed)
+    }
+
+    @Test
+    fun radialGradient_drawsCenterDifferentFromEdge() {
+        val parsed = SVGParser.parse(radialGradientSvg)!!
+        val bmp = bitmap()
+        SVGRenderer.drawSvg(Canvas(bmp), 0, 0, 100, 100, parsed)
+        val center = pixelAt(bmp, 50, 50)
+        val corner = pixelAt(bmp, 2, 2)
+        assertNotEquals("Radial center and edge should differ", center, corner)
+    }
+
+    @Test
+    fun gradient_tintOverridesToFlat() {
+        val parsed = SVGParser.parse(linearGradientSvg)!!
+        val bmp = bitmap()
+        SVGRenderer.drawSvg(Canvas(bmp), 0, 0, 100, 100, parsed, tint = 0xFF000000.toInt())
+        // tint collapses the gradient to flat black across the whole rect.
+        assertEquals(0xFF000000.toInt(), pixelAt(bmp, 2, 50))
+        assertEquals(0xFF000000.toInt(), pixelAt(bmp, 97, 50))
+    }
+
+    // ------------------------------------------------------------------
     // Malformed SVG should not crash
     // ------------------------------------------------------------------
 

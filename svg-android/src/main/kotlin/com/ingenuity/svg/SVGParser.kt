@@ -65,12 +65,64 @@ object SVGParser {
                     cap         = cap,
                     join        = join,
                     miter       = raw.shapeMiterLimit[si],
-                    evenOdd     = evenOdd
+                    evenOdd     = evenOdd,
+                    fillPaint   = buildPaint(raw, raw.shapeFillType[si],
+                                             raw.shapeFillColor[si], raw.shapeFillGradient[si]),
+                    strokePaint = buildPaint(raw, raw.shapeStrokeType[si],
+                                             raw.shapeStrokeColor[si], raw.shapeStrokeGradient[si])
                 )
             )
         }
 
         return ParsedSVG(raw.width, raw.height, shapes)
+    }
+
+    /**
+     * Builds an [SVGPaint] from the native paint type code, solid color and
+     * gradient-table index.  Type codes: 0=none, 1=color, 2=linear, 3=radial.
+     */
+    private fun buildPaint(raw: SVGRawData, type: Int, color: Int, gradIdx: Int): SVGPaint {
+        return when (type) {
+            1 -> SVGPaint.Color(color)
+            2 -> if (gradIdx >= 0) SVGPaint.Linear(
+                    SVGLinearGradient(
+                        xform  = gradientXform(raw, gradIdx),
+                        stops  = gradientStops(raw, gradIdx),
+                        spread = spreadOf(raw.gradSpread[gradIdx])
+                    )
+                ) else SVGPaint.None
+            3 -> if (gradIdx >= 0) SVGPaint.Radial(
+                    SVGRadialGradient(
+                        xform  = gradientXform(raw, gradIdx),
+                        fx     = raw.gradFx[gradIdx],
+                        fy     = raw.gradFy[gradIdx],
+                        stops  = gradientStops(raw, gradIdx),
+                        spread = spreadOf(raw.gradSpread[gradIdx])
+                    )
+                ) else SVGPaint.None
+            else -> SVGPaint.None
+        }
+    }
+
+    private fun gradientXform(raw: SVGRawData, gradIdx: Int): FloatArray {
+        val base = gradIdx * 6
+        return raw.gradXform.copyOfRange(base, base + 6)
+    }
+
+    private fun gradientStops(raw: SVGRawData, gradIdx: Int): List<SVGGradientStop> {
+        val start = raw.gradStopStart[gradIdx]
+        val count = raw.gradStopCount[gradIdx]
+        val stops = ArrayList<SVGGradientStop>(count)
+        for (i in 0 until count) {
+            stops.add(SVGGradientStop(raw.gradStopOffsets[start + i], raw.gradStopColors[start + i]))
+        }
+        return stops
+    }
+
+    private fun spreadOf(code: Int): SVGSpread = when (code) {
+        1    -> SVGSpread.REFLECT
+        2    -> SVGSpread.REPEAT
+        else -> SVGSpread.PAD
     }
 
     /**
